@@ -1,0 +1,51 @@
+{
+  "executionPlatform": "Camunda Cloud",
+  "executionPlatformVersion": "8.8.0",
+  "exporter": {
+    "name": "Camunda Modeler",
+    "version": "5.40.0"
+  },
+  "schemaVersion": 18,
+  "id": "approve-order",
+  "type": "default",
+  "components": [
+    {
+      "id": "Text_intro",
+      "type": "text",
+      "text": "### Approve order\n\nOrder **{{orderId}}** from customer **{{customerId}}** ({{customerSegment}}) needs a manual decision because of its value or the customer's history."
+    },
+    {
+      "id": "Number_total",
+      "type": "number",
+      "key": "totalAmount",
+      "label": "Order total (EUR)",
+      "readonly": true,
+      "decimalDigits": 2
+    },
+    {
+      "id": "Text_terms",
+      "type": "text",
+      "text": "Payment term from the decision table: **{{approval.paymentTerm}}**"
+    },
+    {
+      "id": "Checkbox_approved",
+      "type": "checkbox",
+      "key": "approved",
+      "label": "Approve this order",
+      "defaultValue": false
+    },
+    {
+      "id": "Textarea_comment",
+      "type": "textarea",
+      "key": "approvalComment",
+      "label": "Comment",
+      "description": "Required when you decline the order.",
+      "validate": {
+        "maxLength": 500
+      },
+      "conditional": {
+        "hide": "=approved = true"
+      }
+    }
+  ]
+}

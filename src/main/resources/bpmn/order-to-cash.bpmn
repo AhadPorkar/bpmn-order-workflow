@@ -1,0 +1,461 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:zeebe="http://camunda.org/schema/zeebe/1.0" xmlns:modeler="http://camunda.org/schema/modeler/1.0" id="Definitions_order_to_cash" targetNamespace="http://bpmn.io/schema/bpmn" exporter="Camunda Modeler" exporterVersion="5.40.0" modeler:executionPlatform="Camunda Cloud" modeler:executionPlatformVersion="8.8.0">
+  <bpmn:message id="Message_payment_received" name="PaymentReceived">
+    <bpmn:extensionElements>
+      <zeebe:subscription correlationKey="=orderId"/>
+    </bpmn:extensionElements>
+  </bpmn:message>
+  <bpmn:error id="Error_out_of_stock" name="Out of stock" errorCode="OUT_OF_STOCK"/>
+  <bpmn:process id="order-to-cash" name="Order to cash" isExecutable="true">
+    <bpmn:documentation>Order-to-cash: inventory check, DMN-based approval, stock reservation and invoicing (both compensable), payment wait with reminder and deadline, shipping.</bpmn:documentation>
+    <bpmn:extensionElements>
+      <zeebe:versionTag value="1.0.0"/>
+    </bpmn:extensionElements>
+    <bpmn:startEvent id="start_order_received" name="Order received">
+      <bpmn:outgoing>flow_start_to_check</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:serviceTask id="task_check_inventory" name="Check inventory">
+      <bpmn:documentation>Checks that every order line can be served from available stock.</bpmn:documentation>
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="inventory.check" retries="3"/>
+      </bpmn:extensionElements>
+      <bpmn:incoming>flow_start_to_check</bpmn:incoming>
+      <bpmn:outgoing>flow_check_to_gateway</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:exclusiveGateway id="gw_in_stock" name="In stock?" default="flow_in_stock_no">
+      <bpmn:incoming>flow_check_to_gateway</bpmn:incoming>
+      <bpmn:outgoing>flow_in_stock_yes</bpmn:outgoing>
+      <bpmn:outgoing>flow_in_stock_no</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:businessRuleTask id="task_decide_approval" name="Decide approval and payment terms">
+      <bpmn:documentation>DMN decision 'order-approval': approval required?, payment term, reminder delay.</bpmn:documentation>
+      <bpmn:extensionElements>
+        <zeebe:calledDecision decisionId="order-approval" resultVariable="approval"/>
+      </bpmn:extensionElements>
+      <bpmn:incoming>flow_in_stock_yes</bpmn:incoming>
+      <bpmn:outgoing>flow_decide_to_gateway</bpmn:outgoing>
+    </bpmn:businessRuleTask>
+    <bpmn:exclusiveGateway id="gw_approval_required" name="Approval required?" default="flow_no_approval_needed">
+      <bpmn:incoming>flow_decide_to_gateway</bpmn:incoming>
+      <bpmn:outgoing>flow_approval_needed</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_approval_needed</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:userTask id="task_approve_order" name="Approve order">
+      <bpmn:extensionElements>
+        <zeebe:userTask/>
+        <zeebe:formDefinition formId="approve-order"/>
+        <zeebe:assignmentDefinition candidateGroups="sales"/>
+      </bpmn:extensionElements>
+      <bpmn:incoming>flow_approval_needed</bpmn:incoming>
+      <bpmn:outgoing>flow_approve_to_gateway</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:exclusiveGateway id="gw_approved" name="Approved?" default="flow_approved_no">
+      <bpmn:incoming>flow_approve_to_gateway</bpmn:incoming>
+      <bpmn:outgoing>flow_approved_yes</bpmn:outgoing>
+      <bpmn:outgoing>flow_approved_no</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:serviceTask id="task_notify_declined" name="Inform customer: declined">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="customer.notify" retries="3"/>
+        <zeebe:ioMapping>
+          <zeebe:input source="=&quot;DECLINED&quot;" target="outcome"/>
+        </zeebe:ioMapping>
+      </bpmn:extensionElements>
+      <bpmn:incoming>flow_approved_no</bpmn:incoming>
+      <bpmn:outgoing>flow_declined_to_end</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:endEvent id="end_declined" name="Order declined">
+      <bpmn:incoming>flow_declined_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:exclusiveGateway id="gw_join_approval">
+      <bpmn:incoming>flow_no_approval_needed</bpmn:incoming>
+      <bpmn:incoming>flow_approved_yes</bpmn:incoming>
+      <bpmn:outgoing>flow_join_to_reserve</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:serviceTask id="task_reserve_stock" name="Reserve stock">
+      <bpmn:documentation>Idempotent reservation per order. Throws OUT_OF_STOCK if stock ran out since the check.</bpmn:documentation>
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="inventory.reserve" retries="3"/>
+      </bpmn:extensionElements>
+      <bpmn:incoming>flow_join_to_reserve</bpmn:incoming>
+      <bpmn:outgoing>flow_reserve_to_invoice</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:boundaryEvent id="boundary_out_of_stock" name="Out of stock" attachedToRef="task_reserve_stock">
+      <bpmn:outgoing>flow_out_of_stock_to_join</bpmn:outgoing>
+      <bpmn:errorEventDefinition id="ErrorEventDefinition_boundary_out_of_stock" errorRef="Error_out_of_stock"/>
+    </bpmn:boundaryEvent>
+    <bpmn:boundaryEvent id="boundary_compensate_reserve" attachedToRef="task_reserve_stock">
+      <bpmn:compensateEventDefinition id="CompensateEventDefinition_boundary_compensate_reserve"/>
+    </bpmn:boundaryEvent>
+    <bpmn:serviceTask id="task_release_stock" name="Release stock" isForCompensation="true">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="inventory.release" retries="3"/>
+      </bpmn:extensionElements>
+    </bpmn:serviceTask>
+    <bpmn:serviceTask id="task_create_invoice" name="Create invoice">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="invoice.create" retries="3"/>
+      </bpmn:extensionElements>
+      <bpmn:incoming>flow_reserve_to_invoice</bpmn:incoming>
+      <bpmn:outgoing>flow_invoice_to_wait</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:boundaryEvent id="boundary_compensate_invoice" attachedToRef="task_create_invoice">
+      <bpmn:compensateEventDefinition id="CompensateEventDefinition_boundary_compensate_invoice"/>
+    </bpmn:boundaryEvent>
+    <bpmn:serviceTask id="task_cancel_invoice" name="Cancel invoice" isForCompensation="true">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="invoice.cancel" retries="3"/>
+      </bpmn:extensionElements>
+    </bpmn:serviceTask>
+    <bpmn:receiveTask id="task_wait_for_payment" name="Wait for payment" messageRef="Message_payment_received">
+      <bpmn:documentation>Correlated by orderId. Payments arrive from Kafka topic 'payments'.</bpmn:documentation>
+      <bpmn:incoming>flow_invoice_to_wait</bpmn:incoming>
+      <bpmn:outgoing>flow_wait_to_ship</bpmn:outgoing>
+    </bpmn:receiveTask>
+    <bpmn:boundaryEvent id="boundary_payment_reminder" name="Reminder due" cancelActivity="false" attachedToRef="task_wait_for_payment">
+      <bpmn:outgoing>flow_reminder_to_task</bpmn:outgoing>
+      <bpmn:timerEventDefinition id="TimerEventDefinition_boundary_payment_reminder">
+        <bpmn:timeDuration xsi:type="bpmn:tFormalExpression">=approval.reminderAfter</bpmn:timeDuration>
+      </bpmn:timerEventDefinition>
+    </bpmn:boundaryEvent>
+    <bpmn:boundaryEvent id="boundary_payment_deadline" name="Payment deadline" attachedToRef="task_wait_for_payment">
+      <bpmn:outgoing>flow_deadline_to_compensation</bpmn:outgoing>
+      <bpmn:timerEventDefinition id="TimerEventDefinition_boundary_payment_deadline">
+        <bpmn:timeDuration xsi:type="bpmn:tFormalExpression">=approval.paymentTerm</bpmn:timeDuration>
+      </bpmn:timerEventDefinition>
+    </bpmn:boundaryEvent>
+    <bpmn:serviceTask id="task_send_reminder" name="Send payment reminder">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="customer.notify" retries="3"/>
+        <zeebe:ioMapping>
+          <zeebe:input source="=&quot;PAYMENT_REMINDER&quot;" target="outcome"/>
+        </zeebe:ioMapping>
+      </bpmn:extensionElements>
+      <bpmn:incoming>flow_reminder_to_task</bpmn:incoming>
+      <bpmn:outgoing>flow_reminder_task_to_end</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:endEvent id="end_reminder_sent" name="Reminder sent">
+      <bpmn:incoming>flow_reminder_task_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:intermediateThrowEvent id="throw_compensate_order" name="Undo reservation and invoice">
+      <bpmn:documentation>Compensates every completed compensable activity: releases stock, cancels the invoice.</bpmn:documentation>
+      <bpmn:incoming>flow_deadline_to_compensation</bpmn:incoming>
+      <bpmn:outgoing>flow_compensation_to_cancel</bpmn:outgoing>
+      <bpmn:compensateEventDefinition id="CompensateEventDefinition_throw_compensate_order" waitForCompletion="true"/>
+    </bpmn:intermediateThrowEvent>
+    <bpmn:serviceTask id="task_cancel_order" name="Cancel order">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="order.cancel" retries="3"/>
+      </bpmn:extensionElements>
+      <bpmn:incoming>flow_compensation_to_cancel</bpmn:incoming>
+      <bpmn:outgoing>flow_cancel_to_end</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:endEvent id="end_cancelled" name="Order cancelled">
+      <bpmn:incoming>flow_cancel_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:serviceTask id="task_ship_order" name="Ship order">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="shipping.ship" retries="3"/>
+      </bpmn:extensionElements>
+      <bpmn:incoming>flow_wait_to_ship</bpmn:incoming>
+      <bpmn:outgoing>flow_ship_to_end</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:endEvent id="end_completed" name="Order completed">
+      <bpmn:incoming>flow_ship_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:exclusiveGateway id="gw_join_out_of_stock">
+      <bpmn:incoming>flow_in_stock_no</bpmn:incoming>
+      <bpmn:incoming>flow_out_of_stock_to_join</bpmn:incoming>
+      <bpmn:outgoing>flow_join_to_notify_out_of_stock</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:serviceTask id="task_notify_out_of_stock" name="Inform customer: out of stock">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="customer.notify" retries="3"/>
+        <zeebe:ioMapping>
+          <zeebe:input source="=&quot;REJECTED_OUT_OF_STOCK&quot;" target="outcome"/>
+        </zeebe:ioMapping>
+      </bpmn:extensionElements>
+      <bpmn:incoming>flow_join_to_notify_out_of_stock</bpmn:incoming>
+      <bpmn:outgoing>flow_out_of_stock_to_end</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:endEvent id="end_rejected" name="Order rejected">
+      <bpmn:incoming>flow_out_of_stock_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="flow_start_to_check" sourceRef="start_order_received" targetRef="task_check_inventory"/>
+    <bpmn:sequenceFlow id="flow_check_to_gateway" sourceRef="task_check_inventory" targetRef="gw_in_stock"/>
+    <bpmn:sequenceFlow id="flow_in_stock_yes" name="yes" sourceRef="gw_in_stock" targetRef="task_decide_approval">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">=inStock</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_in_stock_no" name="no" sourceRef="gw_in_stock" targetRef="gw_join_out_of_stock"/>
+    <bpmn:sequenceFlow id="flow_decide_to_gateway" sourceRef="task_decide_approval" targetRef="gw_approval_required"/>
+    <bpmn:sequenceFlow id="flow_approval_needed" name="yes" sourceRef="gw_approval_required" targetRef="task_approve_order">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">=approval.approvalRequired</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_approval_needed" name="no" sourceRef="gw_approval_required" targetRef="gw_join_approval"/>
+    <bpmn:sequenceFlow id="flow_approve_to_gateway" sourceRef="task_approve_order" targetRef="gw_approved"/>
+    <bpmn:sequenceFlow id="flow_approved_yes" name="yes" sourceRef="gw_approved" targetRef="gw_join_approval">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">=approved = true</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_approved_no" name="no" sourceRef="gw_approved" targetRef="task_notify_declined"/>
+    <bpmn:sequenceFlow id="flow_declined_to_end" sourceRef="task_notify_declined" targetRef="end_declined"/>
+    <bpmn:sequenceFlow id="flow_join_to_reserve" sourceRef="gw_join_approval" targetRef="task_reserve_stock"/>
+    <bpmn:sequenceFlow id="flow_reserve_to_invoice" sourceRef="task_reserve_stock" targetRef="task_create_invoice"/>
+    <bpmn:sequenceFlow id="flow_out_of_stock_to_join" sourceRef="boundary_out_of_stock" targetRef="gw_join_out_of_stock"/>
+    <bpmn:sequenceFlow id="flow_join_to_notify_out_of_stock" sourceRef="gw_join_out_of_stock" targetRef="task_notify_out_of_stock"/>
+    <bpmn:sequenceFlow id="flow_out_of_stock_to_end" sourceRef="task_notify_out_of_stock" targetRef="end_rejected"/>
+    <bpmn:sequenceFlow id="flow_invoice_to_wait" sourceRef="task_create_invoice" targetRef="task_wait_for_payment"/>
+    <bpmn:sequenceFlow id="flow_wait_to_ship" sourceRef="task_wait_for_payment" targetRef="task_ship_order"/>
+    <bpmn:sequenceFlow id="flow_ship_to_end" sourceRef="task_ship_order" targetRef="end_completed"/>
+    <bpmn:sequenceFlow id="flow_reminder_to_task" sourceRef="boundary_payment_reminder" targetRef="task_send_reminder"/>
+    <bpmn:sequenceFlow id="flow_reminder_task_to_end" sourceRef="task_send_reminder" targetRef="end_reminder_sent"/>
+    <bpmn:sequenceFlow id="flow_deadline_to_compensation" sourceRef="boundary_payment_deadline" targetRef="throw_compensate_order"/>
+    <bpmn:sequenceFlow id="flow_compensation_to_cancel" sourceRef="throw_compensate_order" targetRef="task_cancel_order"/>
+    <bpmn:sequenceFlow id="flow_cancel_to_end" sourceRef="task_cancel_order" targetRef="end_cancelled"/>
+    <bpmn:association id="association_release_stock" associationDirection="One" sourceRef="boundary_compensate_reserve" targetRef="task_release_stock"/>
+    <bpmn:association id="association_cancel_invoice" associationDirection="One" sourceRef="boundary_compensate_invoice" targetRef="task_cancel_invoice"/>
+  </bpmn:process>
+  <bpmndi:BPMNDiagram id="BPMNDiagram_order_to_cash">
+    <bpmndi:BPMNPlane id="BPMNPlane_order_to_cash" bpmnElement="order-to-cash">
+      <bpmndi:BPMNShape id="start_order_received_di" bpmnElement="start_order_received">
+        <dc:Bounds x="152" y="322" width="36" height="36"/>
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="121" y="362" width="98" height="14"/>
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="task_check_inventory_di" bpmnElement="task_check_inventory">
+        <dc:Bounds x="240" y="300" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="gw_in_stock_di" bpmnElement="gw_in_stock" isMarkerVisible="true">
+        <dc:Bounds x="395" y="315" width="50" height="50"/>
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="388" y="293" width="63" height="14"/>
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="task_decide_approval_di" bpmnElement="task_decide_approval">
+        <dc:Bounds x="500" y="300" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="gw_approval_required_di" bpmnElement="gw_approval_required" isMarkerVisible="true">
+        <dc:Bounds x="655" y="315" width="50" height="50"/>
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="620" y="371" width="120" height="14"/>
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="task_approve_order_di" bpmnElement="task_approve_order">
+        <dc:Bounds x="760" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="gw_approved_di" bpmnElement="gw_approved" isMarkerVisible="true">
+        <dc:Bounds x="915" y="195" width="50" height="50"/>
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="908" y="251" width="63" height="14"/>
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="task_notify_declined_di" bpmnElement="task_notify_declined">
+        <dc:Bounds x="1020" y="80" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="end_declined_di" bpmnElement="end_declined">
+        <dc:Bounds x="1182" y="102" width="36" height="36"/>
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="1151" y="142" width="98" height="14"/>
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="gw_join_approval_di" bpmnElement="gw_join_approval" isMarkerVisible="true">
+        <dc:Bounds x="1015" y="315" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="task_reserve_stock_di" bpmnElement="task_reserve_stock">
+        <dc:Bounds x="1120" y="300" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="boundary_out_of_stock_di" bpmnElement="boundary_out_of_stock">
+        <dc:Bounds x="1122" y="362" width="36" height="36"/>
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="1052" y="402" width="84" height="14"/>
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="boundary_compensate_reserve_di" bpmnElement="boundary_compensate_reserve">
+        <dc:Bounds x="1182" y="362" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="task_release_stock_di" bpmnElement="task_release_stock">
+        <dc:Bounds x="1150" y="440" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="task_create_invoice_di" bpmnElement="task_create_invoice">
+        <dc:Bounds x="1280" y="300" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="boundary_compensate_invoice_di" bpmnElement="boundary_compensate_invoice">
+        <dc:Bounds x="1312" y="362" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="task_cancel_invoice_di" bpmnElement="task_cancel_invoice">
+        <dc:Bounds x="1290" y="440" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="task_wait_for_payment_di" bpmnElement="task_wait_for_payment">
+        <dc:Bounds x="1440" y="300" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="boundary_payment_reminder_di" bpmnElement="boundary_payment_reminder">
+        <dc:Bounds x="1472" y="282" width="36" height="36"/>
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="1512" y="278" width="84" height="14"/>
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="boundary_payment_deadline_di" bpmnElement="boundary_payment_deadline">
+        <dc:Bounds x="1472" y="362" width="36" height="36"/>
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="1434" y="402" width="112" height="14"/>
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="task_send_reminder_di" bpmnElement="task_send_reminder">
+        <dc:Bounds x="1540" y="170" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="end_reminder_sent_di" bpmnElement="end_reminder_sent">
+        <dc:Bounds x="1692" y="192" width="36" height="36"/>
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="1664" y="232" width="91" height="14"/>
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="throw_compensate_order_di" bpmnElement="throw_compensate_order">
+        <dc:Bounds x="1562" y="442" width="36" height="36"/>
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="1520" y="482" width="120" height="27"/>
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="task_cancel_order_di" bpmnElement="task_cancel_order">
+        <dc:Bounds x="1650" y="420" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="end_cancelled_di" bpmnElement="end_cancelled">
+        <dc:Bounds x="1802" y="442" width="36" height="36"/>
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="1768" y="482" width="105" height="14"/>
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="task_ship_order_di" bpmnElement="task_ship_order">
+        <dc:Bounds x="1600" y="300" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="end_completed_di" bpmnElement="end_completed">
+        <dc:Bounds x="1762" y="322" width="36" height="36"/>
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="1728" y="362" width="105" height="14"/>
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="gw_join_out_of_stock_di" bpmnElement="gw_join_out_of_stock" isMarkerVisible="true">
+        <dc:Bounds x="395" y="575" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="task_notify_out_of_stock_di" bpmnElement="task_notify_out_of_stock">
+        <dc:Bounds x="500" y="560" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="end_rejected_di" bpmnElement="end_rejected">
+        <dc:Bounds x="652" y="582" width="36" height="36"/>
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="621" y="622" width="98" height="14"/>
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="flow_start_to_check_di" bpmnElement="flow_start_to_check">
+        <di:waypoint x="188" y="340"/>
+        <di:waypoint x="240" y="340"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flow_check_to_gateway_di" bpmnElement="flow_check_to_gateway">
+        <di:waypoint x="340" y="340"/>
+        <di:waypoint x="395" y="340"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flow_in_stock_yes_di" bpmnElement="flow_in_stock_yes">
+        <di:waypoint x="445" y="340"/>
+        <di:waypoint x="500" y="340"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flow_in_stock_no_di" bpmnElement="flow_in_stock_no">
+        <di:waypoint x="420" y="365"/>
+        <di:waypoint x="420" y="575"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flow_decide_to_gateway_di" bpmnElement="flow_decide_to_gateway">
+        <di:waypoint x="600" y="340"/>
+        <di:waypoint x="655" y="340"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flow_approval_needed_di" bpmnElement="flow_approval_needed">
+        <di:waypoint x="680" y="315"/>
+        <di:waypoint x="680" y="220"/>
+        <di:waypoint x="760" y="220"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flow_no_approval_needed_di" bpmnElement="flow_no_approval_needed">
+        <di:waypoint x="705" y="340"/>
+        <di:waypoint x="1015" y="340"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flow_approve_to_gateway_di" bpmnElement="flow_approve_to_gateway">
+        <di:waypoint x="860" y="220"/>
+        <di:waypoint x="915" y="220"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flow_approved_yes_di" bpmnElement="flow_approved_yes">
+        <di:waypoint x="965" y="220"/>
+        <di:waypoint x="1040" y="220"/>
+        <di:waypoint x="1040" y="315"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flow_approved_no_di" bpmnElement="flow_approved_no">
+        <di:waypoint x="940" y="195"/>
+        <di:waypoint x="940" y="120"/>
+        <di:waypoint x="1020" y="120"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flow_declined_to_end_di" bpmnElement="flow_declined_to_end">
+        <di:waypoint x="1120" y="120"/>
+        <di:waypoint x="1182" y="120"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flow_join_to_reserve_di" bpmnElement="flow_join_to_reserve">
+        <di:waypoint x="1065" y="340"/>
+        <di:waypoint x="1120" y="340"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flow_reserve_to_invoice_di" bpmnElement="flow_reserve_to_invoice">
+        <di:waypoint x="1220" y="340"/>
+        <di:waypoint x="1280" y="340"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flow_out_of_stock_to_join_di" bpmnElement="flow_out_of_stock_to_join">
+        <di:waypoint x="1140" y="398"/>
+        <di:waypoint x="1140" y="680"/>
+        <di:waypoint x="420" y="680"/>
+        <di:waypoint x="420" y="625"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flow_join_to_notify_out_of_stock_di" bpmnElement="flow_join_to_notify_out_of_stock">
+        <di:waypoint x="445" y="600"/>
+        <di:waypoint x="500" y="600"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flow_out_of_stock_to_end_di" bpmnElement="flow_out_of_stock_to_end">
+        <di:waypoint x="600" y="600"/>
+        <di:waypoint x="652" y="600"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flow_invoice_to_wait_di" bpmnElement="flow_invoice_to_wait">
+        <di:waypoint x="1380" y="340"/>
+        <di:waypoint x="1440" y="340"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flow_wait_to_ship_di" bpmnElement="flow_wait_to_ship">
+        <di:waypoint x="1540" y="340"/>
+        <di:waypoint x="1600" y="340"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flow_ship_to_end_di" bpmnElement="flow_ship_to_end">
+        <di:waypoint x="1700" y="340"/>
+        <di:waypoint x="1762" y="340"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flow_reminder_to_task_di" bpmnElement="flow_reminder_to_task">
+        <di:waypoint x="1490" y="282"/>
+        <di:waypoint x="1490" y="210"/>
+        <di:waypoint x="1540" y="210"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flow_reminder_task_to_end_di" bpmnElement="flow_reminder_task_to_end">
+        <di:waypoint x="1640" y="210"/>
+        <di:waypoint x="1692" y="210"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flow_deadline_to_compensation_di" bpmnElement="flow_deadline_to_compensation">
+        <di:waypoint x="1490" y="398"/>
+        <di:waypoint x="1490" y="460"/>
+        <di:waypoint x="1562" y="460"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flow_compensation_to_cancel_di" bpmnElement="flow_compensation_to_cancel">
+        <di:waypoint x="1598" y="460"/>
+        <di:waypoint x="1650" y="460"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flow_cancel_to_end_di" bpmnElement="flow_cancel_to_end">
+        <di:waypoint x="1750" y="460"/>
+        <di:waypoint x="1802" y="460"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="association_release_stock_di" bpmnElement="association_release_stock">
+        <di:waypoint x="1200" y="398"/>
+        <di:waypoint x="1200" y="440"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="association_cancel_invoice_di" bpmnElement="association_cancel_invoice">
+        <di:waypoint x="1330" y="398"/>
+        <di:waypoint x="1330" y="440"/>
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>

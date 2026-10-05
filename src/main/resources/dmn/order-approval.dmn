@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="https://www.omg.org/spec/DMN/20191111/MODEL/" xmlns:dmndi="https://www.omg.org/spec/DMN/20191111/DMNDI/" xmlns:dc="http://www.omg.org/spec/DMN/20180521/DC/" xmlns:modeler="http://camunda.org/schema/modeler/1.0" id="Definitions_order_approval" name="Order approval" namespace="http://camunda.org/schema/1.0/dmn" exporter="Camunda Modeler" exporterVersion="5.40.0" modeler:executionPlatform="Camunda Cloud" modeler:executionPlatformVersion="8.8.0">
+  <decision id="order-approval" name="Order approval and payment terms">
+    <decisionTable id="DecisionTable_order_approval" hitPolicy="FIRST">
+      <input id="Input_segment" label="Customer segment">
+        <inputExpression id="InputExpression_segment" typeRef="string">
+          <text>customerSegment</text>
+        </inputExpression>
+        <inputValues id="UnaryTests_segment">
+          <text>"NEW","STANDARD","GOLD"</text>
+        </inputValues>
+      </input>
+      <input id="Input_amount" label="Order total (EUR)">
+        <inputExpression id="InputExpression_amount" typeRef="number">
+          <text>totalAmount</text>
+        </inputExpression>
+      </input>
+      <output id="Output_approval" label="Approval required" name="approvalRequired" typeRef="boolean" />
+      <output id="Output_term" label="Payment term (ISO 8601)" name="paymentTerm" typeRef="string" />
+      <output id="Output_reminder" label="Reminder after (ISO 8601)" name="reminderAfter" typeRef="string" />
+      <rule id="Rule_gold_large">
+        <description>Gold customers: approval only for very large orders</description>
+        <inputEntry id="Rule_gold_large_segment"><text>"GOLD"</text></inputEntry>
+        <inputEntry id="Rule_gold_large_amount"><text>&gt;= 50000</text></inputEntry>
+        <outputEntry id="Rule_gold_large_approval"><text>true</text></outputEntry>
+        <outputEntry id="Rule_gold_large_term"><text>"P30D"</text></outputEntry>
+        <outputEntry id="Rule_gold_large_reminder"><text>"P21D"</text></outputEntry>
+      </rule>
+      <rule id="Rule_gold">
+        <description>Gold customers: long payment term</description>
+        <inputEntry id="Rule_gold_segment"><text>"GOLD"</text></inputEntry>
+        <inputEntry id="Rule_gold_amount"><text>-</text></inputEntry>
+        <outputEntry id="Rule_gold_approval"><text>false</text></outputEntry>
+        <outputEntry id="Rule_gold_term"><text>"P30D"</text></outputEntry>
+        <outputEntry id="Rule_gold_reminder"><text>"P21D"</text></outputEntry>
+      </rule>
+      <rule id="Rule_new_large">
+        <description>New customers: approval above 1,000</description>
+        <inputEntry id="Rule_new_large_segment"><text>"NEW"</text></inputEntry>
+        <inputEntry id="Rule_new_large_amount"><text>&gt; 1000</text></inputEntry>
+        <outputEntry id="Rule_new_large_approval"><text>true</text></outputEntry>
+        <outputEntry id="Rule_new_large_term"><text>"P7D"</text></outputEntry>
+        <outputEntry id="Rule_new_large_reminder"><text>"P5D"</text></outputEntry>
+      </rule>
+      <rule id="Rule_new">
+        <description>New customers: short payment term</description>
+        <inputEntry id="Rule_new_segment"><text>"NEW"</text></inputEntry>
+        <inputEntry id="Rule_new_amount"><text>-</text></inputEntry>
+        <outputEntry id="Rule_new_approval"><text>false</text></outputEntry>
+        <outputEntry id="Rule_new_term"><text>"P7D"</text></outputEntry>
+        <outputEntry id="Rule_new_reminder"><text>"P5D"</text></outputEntry>
+      </rule>
+      <rule id="Rule_large">
+        <description>Everyone else: approval above 10,000</description>
+        <inputEntry id="Rule_large_segment"><text>-</text></inputEntry>
+        <inputEntry id="Rule_large_amount"><text>&gt; 10000</text></inputEntry>
+        <outputEntry id="Rule_large_approval"><text>true</text></outputEntry>
+        <outputEntry id="Rule_large_term"><text>"P14D"</text></outputEntry>
+        <outputEntry id="Rule_large_reminder"><text>"P10D"</text></outputEntry>
+      </rule>
+      <rule id="Rule_default">
+        <description>Everyone else: standard terms</description>
+        <inputEntry id="Rule_default_segment"><text>-</text></inputEntry>
+        <inputEntry id="Rule_default_amount"><text>-</text></inputEntry>
+        <outputEntry id="Rule_default_approval"><text>false</text></outputEntry>
+        <outputEntry id="Rule_default_term"><text>"P14D"</text></outputEntry>
+        <outputEntry id="Rule_default_reminder"><text>"P10D"</text></outputEntry>
+      </rule>
+    </decisionTable>
+  </decision>
+  <dmndi:DMNDI>
+    <dmndi:DMNDiagram id="DMNDiagram_order_approval">
+      <dmndi:DMNShape id="DMNShape_order_approval" dmnElementRef="order-approval">
+        <dc:Bounds height="80" width="180" x="160" y="100" />
+      </dmndi:DMNShape>
+    </dmndi:DMNDiagram>
+  </dmndi:DMNDI>
+</definitions>
