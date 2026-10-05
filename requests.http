@@ -1,0 +1,41 @@
+### Catalog with stock
+GET http://localhost:8081/api/products
+
+### Standard order: approved automatically by the decision table
+POST http://localhost:8081/api/orders
+Content-Type: application/json
+
+{
+  "customerId": "customer-42",
+  "customerSegment": "STANDARD",
+  "lines": [{ "sku": "SKU-KEYBOARD", "quantity": 2 }, { "sku": "SKU-MOUSE", "quantity": 1 }]
+}
+
+### Gold customer, 62,500 EUR: needs approval in Tasklist (http://localhost:8088/tasklist)
+POST http://localhost:8081/api/orders
+Content-Type: application/json
+
+{
+  "customerId": "customer-gold",
+  "customerSegment": "GOLD",
+  "lines": [{ "sku": "SKU-SERVER", "quantity": 5 }]
+}
+
+### Sold-out product: rejected
+POST http://localhost:8081/api/orders
+Content-Type: application/json
+
+{
+  "customerId": "customer-7",
+  "customerSegment": "STANDARD",
+  "lines": [{ "sku": "SKU-SOLDOUT", "quantity": 1 }]
+}
+
+### Order status (replace the id)
+GET http://localhost:8081/api/orders/{{orderId}}
+
+### Pay (simulates the payment provider; goes through Kafka)
+POST http://localhost:8081/api/orders/{{orderId}}/payments
+Content-Type: application/json
+
+{ "amount": 217.00, "paymentId": "pay-001" }

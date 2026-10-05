@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: maven
+
+      # Unit tests, process tests (Camunda Process Test, Testcontainers) and integration tests
+      # (PostgreSQL, Kafka, Camunda) all run here; GitHub's Ubuntu runners provide Docker.
+      # "sh" keeps this working even if the executable bit of mvnw was lost on the way into Git.
+      - name: Build, test, coverage
+        run: sh ./mvnw -B -ntp verify
+
+      - name: Test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            target/surefire-reports/
+            target/failsafe-reports/
+
+      - name: Coverage report
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: target/site/jacoco/
+
+  image:
+    name: Container image builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: bpmn-order-workflow:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  compose:
+    name: docker-compose file is valid
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose config --quiet
+
+  docs:
+    name: Docs (Markdown lint, links, Mermaid)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DavidAnson/markdownlint-cli2-action@v19
+        with:
+          globs: "**/*.md"
+
+      # Offline: checks every relative link and heading anchor; external sites are not contacted.
+      - uses: lycheeverse/lychee-action@v2
+        with:
+          args: --offline --no-progress --include-fragments './**/*.md'
+          fail: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Render every Mermaid diagram
+        run: |
+          npm install --global @mermaid-js/mermaid-cli@11
+          echo '{"args":["--no-sandbox"]}' > /tmp/puppeteer.json
+          mkdir -p /tmp/mermaid
+          status=0
+          while IFS= read -r file; do
+            if grep -q '^```mermaid' "$file"; then
+              echo "::group::$file"
+              mmdc --quiet -p /tmp/puppeteer.json -i "$file" -o "/tmp/mermaid/$(echo "$file" | tr '/' '_')" || status=1
+              echo "::endgroup::"
+            fi
+          done < <(git ls-files '*.md')
+          exit $status
+
+      - name: Shell scripts
+        run: shellcheck scripts/*.sh
