@@ -40,7 +40,7 @@
     <!-- Align with the versions Camunda 8.8 builds and tests its process-test library against -->
     <testcontainers.version>2.0.5</testcontainers.version>
     <junit-jupiter.version>5.13.4</junit-jupiter.version>
-    <jacoco.version>0.8.13</jacoco.version>
+    <jacoco.version>0.8.15</jacoco.version>
   </properties>
 
   <dependencies>
