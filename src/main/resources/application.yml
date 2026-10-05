@@ -1,0 +1,66 @@
+spring:
+  application:
+    name: bpmn-order-workflow
+  threads:
+    virtual:
+      enabled: true
+  datasource:
+    url: jdbc:postgresql://localhost:5432/orders
+    username: orders
+    password: orders
+  flyway:
+    enabled: true
+  kafka:
+    bootstrap-servers: localhost:29092   # host listener of the compose Kafka
+    consumer:
+      group-id: order-to-cash
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    producer:
+      acks: all
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      properties:
+        enable.idempotence: true
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+
+server:
+  port: 8081
+
+camunda:
+  client:
+    mode: self-managed
+    grpc-address: http://localhost:26500
+    rest-address: http://localhost:8088
+    auth:
+      method: none
+    worker:
+      defaults:
+        max-jobs-active: 32
+
+app:
+  messaging:
+    mode: kafka          # kafka | direct (direct correlates payments in-process, for demos)
+  kafka:
+    payments-topic: payments
+    events-topic: order-events
+    outbox-poll-interval-ms: 1000
+  payments:
+    message-time-to-live: PT1H
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+logging:
+  level:
+    io.github.ahadporkar.ordertocash: INFO
