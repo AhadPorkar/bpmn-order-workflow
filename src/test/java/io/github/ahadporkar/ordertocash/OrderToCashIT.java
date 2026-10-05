@@ -26,8 +26,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.kafka.KafkaContainer;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
@@ -40,14 +38,19 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
     webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
     properties = {"app.kafka.outbox-poll-interval-ms=200", "app.messaging.mode=kafka"})
 @CamundaSpringProcessTest
-@Testcontainers
 class OrderToCashIT {
 
-  @Container
+  // Started when the class loads, before Spring builds the application context. A JUnit
+  // @Container field would start too late: the Camunda Process Test listener creates the
+  // context in beforeTestClass, before the Testcontainers extension starts its containers.
+  // Testcontainers' Ryuk removes both containers when the test JVM exits.
   static final PostgreSQLContainer POSTGRES = Containers.postgres();
-
-  @Container
   static final KafkaContainer KAFKA = Containers.kafka();
+
+  static {
+    POSTGRES.start();
+    KAFKA.start();
+  }
 
   @DynamicPropertySource
   static void infrastructure(DynamicPropertyRegistry registry) {
