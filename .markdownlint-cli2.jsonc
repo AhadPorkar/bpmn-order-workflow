@@ -1,0 +1,12 @@
+{
+  // Markdown style rules for this repository (markdownlint-cli2).
+  "config": {
+    "default": true,
+    "MD013": false,                       // long lines: tables and links read better unwrapped
+    "MD024": { "siblings_only": true },   // repeated headings allowed in different sections
+    "MD033": false,                       // inline HTML is only used inside Mermaid labels
+    "MD060": false                        // table column alignment: not enforced
+  },
+  "globs": ["**/*.md"],
+  "ignores": ["target/**", "node_modules/**"]
+}
