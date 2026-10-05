@@ -9,7 +9,7 @@ RUN --mount=type=cache,target=/root/.m2 mvn -B -q -DskipTests package \
  && java -Djarmode=tools -jar target/bpmn-order-workflow-*.jar extract --layers --launcher --destination /extracted
 
 # ---- run -------------------------------------------------------------------
-FROM eclipse-temurin:21-jre-alpine
+FROM eclipse-temurin:25-jre-alpine
 LABEL org.opencontainers.image.source="https://github.com/AhadPorkar/bpmn-order-workflow" \
       org.opencontainers.image.description="Order-to-cash service on Camunda 8" \
       org.opencontainers.image.licenses="MIT"
