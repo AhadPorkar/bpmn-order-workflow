@@ -36,7 +36,7 @@
   <properties>
     <java.version>21</java.version>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    <camunda.version>8.8.40</camunda.version>
+    <camunda.version>8.10.2</camunda.version>
     <!-- Align with the versions Camunda 8.8 builds and tests its process-test library against -->
     <testcontainers.version>2.0.5</testcontainers.version>
     <junit-jupiter.version>5.13.4</junit-jupiter.version>
